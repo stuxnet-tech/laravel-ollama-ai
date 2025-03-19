@@ -13,19 +13,25 @@ class OllamaApiService
         $this->url = env('OLLAMA_API_URL', 'http://localhost:11434');
     }
 
-    public function generate(string $prompt, string $model = 'llama2')
+    public function streamGenerate(string $prompt, string $model = 'llama2')
     {
-        $response = Http::post("{$this->url}/api/generate", [
+        $response = Http::withOptions([
+            'stream' => true,  
+            'timeout' => 0,    
+        ])->post("{$this->url}/api/generate", [
             'model' => $model,
             'prompt' => $prompt,
-            'stream' => false,
+            'stream' => true,  
         ]);
+
         if ($response->failed()) {
-            return 'Failed to generate response.';
+            throw new \Exception('Failed to connect to Ollama API.');
         }
 
-        return $response->json()['response'] ?? 'No response.';
+        return $response->toPsrResponse()->getBody();
     }
 }
+
+
 
 

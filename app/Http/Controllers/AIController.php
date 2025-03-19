@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\OllamaApiService;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
@@ -22,10 +23,30 @@ class AIController extends Controller
 
     public function generate(Request $request)
     {
-        $prompt = $request->input('prompt', $request->prompt);
-        $response = $this->ollamaApiService->generate($request->prompt);
+        
+        $prompt = $request->input('prompt', '');
 
-        return response()->json(['response' => $response]);
+        return response()->stream(function () use ($prompt) {
+            try {
+                $stream = $this->ollamaApiService->streamGenerate($prompt);
+
+                while (!$stream->eof()) {
+                    echo $stream->read(1024); // Send data in 1KB chunks
+                    ob_flush();
+                    flush();
+                }
+
+                $stream->close();
+            } catch (\Exception $e) {
+                echo json_encode(['error' => 'Failed to stream response']);
+            }
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'X-Accel-Buffering' => 'no',
+        ]);
     }
 }
+
+
 
