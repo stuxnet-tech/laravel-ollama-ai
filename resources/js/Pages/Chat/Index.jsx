@@ -5,97 +5,105 @@ export default function Index() {
     const [prompt, setPrompt] = useState('');
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [streamingMessage, setStreamingMessage] = useState('');
-    const [displayedMessage, setDisplayedMessage] = useState('');
-    
     const messagesEndRef = useRef(null);
+    const bufferRef = useRef('');
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, displayedMessage]);
-
-    useEffect(() => {
-        if (streamingMessage) {
-            let i = 0;
-            const interval = setInterval(() => {
-                if (i < streamingMessage.length) {
-                    setDisplayedMessage((prev) => prev + streamingMessage[i]);
-                    i++;
-                } else {
-                    clearInterval(interval);
-                }
-            }, 30);  // Adjust speed of typing effect
-            return () => clearInterval(interval);
-        }
-    }, [streamingMessage]);
-
-    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    }, [messages]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!prompt.trim()) return;
+        if (!prompt.trim() || loading) return;
 
-        const newMessage = { role: 'user', content: prompt };
-        setMessages((prev) => [...prev, newMessage]);
+        const userMessage = { 
+            id: Date.now(),
+            role: 'user', 
+            content: prompt 
+        };
+        
+        // Add user message and empty AI response placeholder
+        const aiMessageId = Date.now() + 1;
+        setMessages(prev => [
+            ...prev, 
+            userMessage,
+            { 
+                id: aiMessageId,
+                role: 'ai', 
+                content: '',
+                streaming: true 
+            }
+        ]);
+        
+        setPrompt('');
         setLoading(true);
-        setStreamingMessage('');
-        setDisplayedMessage('');
+        bufferRef.current = ''; // Reset buffer for new stream
 
         try {
-            const response = await fetch(`/chat/generate?prompt=${encodeURIComponent(prompt)}`, {
+            const response = await fetch('/chat/generate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': csrfToken,  
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    'Accept': 'text/event-stream',
                 },
                 body: JSON.stringify({ prompt })
             });
 
             if (!response.ok) {
-                console.error('Error fetching stream');
-                return;
+                throw new Error('Network response was not ok');
             }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
+            let fullResponse = '';
 
-            let done = false;
-            let buffer = '';  
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
 
-            while (!done) {
-                const { value, done: streamDone } = await reader.read();
-                done = streamDone;
+                const chunk = decoder.decode(value, { stream: true });
+                bufferRef.current += chunk;
 
-                if (value) {
-                    const chunk = decoder.decode(value, { stream: true });
-                    buffer += chunk;
+                // Process complete lines from the buffer
+                const lines = bufferRef.current.split('\n');
+                for (let i = 0; i < lines.length - 1; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
 
-                    const lines = buffer.split('\n');
-                    
-                    for (let i = 0; i < lines.length - 1; i++) {
-                        const line = lines[i].trim();
-
-                        if (line) {
-                            try {
-                                const json = JSON.parse(line);
-                                if (json.response) {
-                                    setStreamingMessage((prev) => prev + json.response);
-                                }
-                            } catch (error) {
-                                console.error('Error parsing JSON:', error);
-                            }
+                    try {
+                        const data = JSON.parse(line);
+                        if (data.response) {
+                            fullResponse += data.response;
+                            // Update only the streaming message
+                            setMessages(prev => prev.map(msg => 
+                                msg.id === aiMessageId 
+                                    ? { ...msg, content: fullResponse } 
+                                    : msg
+                            ));
                         }
+                    } catch (e) {
+                        console.error('Error parsing JSON:', e, 'Line:', line);
                     }
-
-                    buffer = lines[lines.length - 1];
                 }
+
+                // Keep the last incomplete line in the buffer
+                bufferRef.current = lines[lines.length - 1];
             }
 
-            const botMessage = { role: 'ai', content: streamingMessage };
-            setMessages((prev) => [...prev, botMessage]);
-            setPrompt('');
+            // Mark streaming as complete
+            setMessages(prev => prev.map(msg => 
+                msg.id === aiMessageId 
+                    ? { ...msg, streaming: false } 
+                    : msg
+            ));
         } catch (error) {
             console.error('Error:', error);
+            setMessages(prev => prev.map(msg => 
+                msg.id === aiMessageId 
+                    ? { ...msg, content: 'Error: ' + error.message, streaming: false } 
+                    : msg
+            ));
         } finally {
             setLoading(false);
         }
@@ -105,12 +113,12 @@ export default function Index() {
         <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">
             <Head title="AI Chat" />
             <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-lg">
-                <h1 className="text-2xl font-bold mb-4">Suraj GPT</h1>
+                <h1 className="text-2xl font-bold mb-4">ChatGPT</h1>
                 
                 <div className="h-96 overflow-y-auto border p-4 rounded-lg bg-gray-100">
-                    {messages.map((msg, index) => (
+                    {messages.map((msg) => (
                         <div
-                            key={index}
+                            key={msg.id}
                             className={`mb-4 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}
                         >
                             <div
@@ -121,21 +129,13 @@ export default function Index() {
                                 }`}
                             >
                                 {msg.content}
+                                {msg.streaming && (
+                                    <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-gray-600"></span>
+                                )}
                             </div>
                         </div>
                     ))}
-
-                    {streamingMessage && (
-                        <div className="text-left animate-pulse">
-                            <div className="inline-block bg-gray-300 text-gray-900 px-4 py-2 rounded-lg">
-                                <span className="whitespace-pre-wrap">{displayedMessage}</span>
-                            </div>
-                        </div>
-                    )}
-
                     <div ref={messagesEndRef} />
-
-                    {loading && <div className="text-center mt-2 text-gray-500">Generating...</div>}
                 </div>
 
                 <form onSubmit={handleSubmit} className="mt-4 flex items-center gap-2">
@@ -152,7 +152,7 @@ export default function Index() {
                         className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50"
                         disabled={loading}
                     >
-                        Send
+                        {loading ? 'Generating...' : 'Send'}
                     </button>
                 </form>
             </div>

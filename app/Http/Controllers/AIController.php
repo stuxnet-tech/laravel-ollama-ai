@@ -23,22 +23,24 @@ class AIController extends Controller
 
     public function generate(Request $request)
     {
-        
         $prompt = $request->input('prompt', '');
-
+        
         return response()->stream(function () use ($prompt) {
             try {
                 $stream = $this->ollamaApiService->streamGenerate($prompt);
-
+                
                 while (!$stream->eof()) {
-                    echo $stream->read(1024); // Send data in 1KB chunks
-                    ob_flush();
-                    flush();
+                    $chunk = $stream->read(10);
+                    if (!empty(trim($chunk))) {
+                        echo $chunk;
+                        ob_flush();
+                        flush();
+                    }
                 }
-
+                
                 $stream->close();
             } catch (\Exception $e) {
-                echo json_encode(['error' => 'Failed to stream response']);
+                echo json_encode(['error' => $e->getMessage()]);
             }
         }, 200, [
             'Content-Type' => 'text/event-stream',
