@@ -6,12 +6,28 @@ export default function Index() {
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(false);
     const [streamingMessage, setStreamingMessage] = useState('');
-
+    const [displayedMessage, setDisplayedMessage] = useState('');
+    
     const messagesEndRef = useRef(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, streamingMessage]);
+    }, [messages, displayedMessage]);
+
+    useEffect(() => {
+        if (streamingMessage) {
+            let i = 0;
+            const interval = setInterval(() => {
+                if (i < streamingMessage.length) {
+                    setDisplayedMessage((prev) => prev + streamingMessage[i]);
+                    i++;
+                } else {
+                    clearInterval(interval);
+                }
+            }, 30);  // Adjust speed of typing effect
+            return () => clearInterval(interval);
+        }
+    }, [streamingMessage]);
 
     const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
@@ -23,68 +39,59 @@ export default function Index() {
         setMessages((prev) => [...prev, newMessage]);
         setLoading(true);
         setStreamingMessage('');
+        setDisplayedMessage('');
 
         try {
             const response = await fetch(`/chat/generate?prompt=${encodeURIComponent(prompt)}`, {
                 method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': csrfToken,   // Include CSRF token
-            },
-            body: JSON.stringify({ prompt })
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,  
+                },
+                body: JSON.stringify({ prompt })
             });
 
             if (!response.ok) {
                 console.error('Error fetching stream');
                 return;
             }
+
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            
+
             let done = false;
-            let buffer = '';   // Buffer to store incomplete chunks
-            
+            let buffer = '';  
+
             while (!done) {
                 const { value, done: streamDone } = await reader.read();
                 done = streamDone;
-    
+
                 if (value) {
                     const chunk = decoder.decode(value, { stream: true });
-    
-                    // Append chunk to buffer
                     buffer += chunk;
-    
-                    // Split by newline to handle multiple JSON messages
+
                     const lines = buffer.split('\n');
-    
-                    // Process each line (except the last incomplete one)
+                    
                     for (let i = 0; i < lines.length - 1; i++) {
                         const line = lines[i].trim();
-    
+
                         if (line) {
                             try {
                                 const json = JSON.parse(line);
-    
                                 if (json.response) {
                                     setStreamingMessage((prev) => prev + json.response);
-                                }
-    
-                                if (json.done) {
-                                    done = true;
                                 }
                             } catch (error) {
                                 console.error('Error parsing JSON:', error);
                             }
                         }
                     }
-    
-                    // Keep the last line in the buffer in case it's incomplete
+
                     buffer = lines[lines.length - 1];
                 }
             }
 
             const botMessage = { role: 'ai', content: streamingMessage };
-            
             setMessages((prev) => [...prev, botMessage]);
             setPrompt('');
         } catch (error) {
@@ -99,6 +106,7 @@ export default function Index() {
             <Head title="AI Chat" />
             <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-lg">
                 <h1 className="text-2xl font-bold mb-4">Suraj GPT</h1>
+                
                 <div className="h-96 overflow-y-auto border p-4 rounded-lg bg-gray-100">
                     {messages.map((msg, index) => (
                         <div
@@ -118,9 +126,9 @@ export default function Index() {
                     ))}
 
                     {streamingMessage && (
-                        <div className="text-left">
+                        <div className="text-left animate-pulse">
                             <div className="inline-block bg-gray-300 text-gray-900 px-4 py-2 rounded-lg">
-                                {streamingMessage}
+                                <span className="whitespace-pre-wrap">{displayedMessage}</span>
                             </div>
                         </div>
                     )}
