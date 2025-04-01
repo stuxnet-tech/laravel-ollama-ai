@@ -30,7 +30,7 @@ class AIController extends Controller
                 $stream = $this->ollamaApiService->streamGenerate($prompt);
                 
                 while (!$stream->eof()) {
-                    $chunk = $stream->read(10);
+                    $chunk = $stream->read(1024);
                     if (!empty(trim($chunk))) {
                         echo $chunk;
                         ob_flush();
