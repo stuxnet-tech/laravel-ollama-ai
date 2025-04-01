@@ -7,10 +7,49 @@ export default function Index() {
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef(null);
     const bufferRef = useRef('');
+    const animationRef = useRef(null);
+    const [displayedMessages, setDisplayedMessages] = useState({});
 
+    // Auto-scroll to bottom
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    }, [messages, displayedMessages]);
+
+    // Typing animation effect
+    useEffect(() => {
+        const animateText = () => {
+            setMessages(prevMessages => {
+                const updatedMessages = prevMessages.map(msg => {
+                    if (msg.streaming && displayedMessages[msg.id] !== msg.content) {
+                        const currentDisplay = displayedMessages[msg.id] || '';
+                        const targetText = msg.content;
+                        
+                        if (currentDisplay.length < targetText.length) {
+                            const newDisplay = targetText.substring(0, currentDisplay.length + 1);
+                            setDisplayedMessages(prev => ({
+                                ...prev,
+                                [msg.id]: newDisplay
+                            }));
+                        } else {
+                            // Animation complete
+                            return { ...msg, streaming: false };
+                        }
+                    }
+                    return msg;
+                });
+                return updatedMessages;
+            });
+        };
+
+        animationRef.current = requestAnimationFrame(function animate() {
+            animateText();
+            animationRef.current = requestAnimationFrame(animate);
+        });
+
+        return () => {
+            cancelAnimationFrame(animationRef.current);
+        };
+    }, [displayedMessages]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -37,7 +76,8 @@ export default function Index() {
         
         setPrompt('');
         setLoading(true);
-        bufferRef.current = ''; // Reset buffer for new stream
+        bufferRef.current = '';
+        setDisplayedMessages(prev => ({ ...prev, [aiMessageId]: '' }));
 
         try {
             const response = await fetch('/chat/generate', {
@@ -58,37 +98,51 @@ export default function Index() {
             const decoder = new TextDecoder();
             let fullResponse = '';
 
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-
-                const chunk = decoder.decode(value, { stream: true });
+            const processChunk = (chunk) => {
                 bufferRef.current += chunk;
-
-                // Process complete lines from the buffer
                 const lines = bufferRef.current.split('\n');
+                
+                // Process all complete lines except the last one
                 for (let i = 0; i < lines.length - 1; i++) {
                     const line = lines[i].trim();
                     if (!line) continue;
 
-                    try {
-                        const data = JSON.parse(line);
-                        if (data.response) {
-                            fullResponse += data.response;
-                            // Update only the streaming message
-                            setMessages(prev => prev.map(msg => 
-                                msg.id === aiMessageId 
-                                    ? { ...msg, content: fullResponse } 
-                                    : msg
-                            ));
+                    // Handle cases where multiple JSON objects might be concatenated
+                    const jsonObjects = line.split('}{').map((obj, index) => {
+                        if (index === 0) return obj + (line.includes('}{') ? '}' : '');
+                        return '{' + obj + (index === line.split('}{').length - 2 ? '}' : '');
+                    }).filter(obj => obj.trim().startsWith('{'));
+
+                    for (const obj of jsonObjects) {
+                        try {
+                            const data = JSON.parse(obj);
+                            if (data.response) {
+                                fullResponse += data.response;
+                                setMessages(prev => prev.map(msg => 
+                                    msg.id === aiMessageId 
+                                        ? { ...msg, content: fullResponse } 
+                                        : msg
+                                ));
+                            }
+                        } catch (e) {
+                            console.error('Error parsing JSON:', e, 'Object:', obj);
                         }
-                    } catch (e) {
-                        console.error('Error parsing JSON:', e, 'Line:', line);
                     }
                 }
 
-                // Keep the last incomplete line in the buffer
+                // Keep the last incomplete line in buffer
                 bufferRef.current = lines[lines.length - 1];
+            };
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                processChunk(decoder.decode(value, { stream: true }));
+            }
+
+            // Process any remaining data in buffer
+            if (bufferRef.current.trim()) {
+                processChunk('');
             }
 
             // Mark streaming as complete
@@ -122,15 +176,20 @@ export default function Index() {
                             className={`mb-4 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}
                         >
                             <div
-                                className={`inline-block px-4 py-2 rounded-lg ${
+                                className={`inline-block px-4 py-2 rounded-lg transition-all duration-100 ${
                                     msg.role === 'user'
                                         ? 'bg-blue-500 text-white'
                                         : 'bg-gray-300 text-gray-900'
                                 }`}
                             >
-                                {msg.content}
+                                {msg.role === 'user' 
+                                    ? msg.content 
+                                    : (displayedMessages[msg.id] || '')}
+                                
                                 {msg.streaming && (
-                                    <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-gray-600"></span>
+                                    <>
+                                        <span className="typing-cursor">|</span>
+                                    </>
                                 )}
                             </div>
                         </div>
@@ -141,7 +200,7 @@ export default function Index() {
                 <form onSubmit={handleSubmit} className="mt-4 flex items-center gap-2">
                     <input
                         type="text"
-                        className="w-full p-2 border rounded-lg"
+                        className="w-full p-2 border rounded-lg transition-all duration-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         placeholder="Type your prompt..."
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
@@ -149,13 +208,30 @@ export default function Index() {
                     />
                     <button
                         type="submit"
-                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors duration-200"
                         disabled={loading}
                     >
-                        {loading ? 'Generating...' : 'Send'}
+                        {loading ? (
+                            <span className="flex items-center">
+                                <span className="animate-spin mr-2">↻</span>
+                                Generating...
+                            </span>
+                        ) : 'Send'}
                     </button>
                 </form>
             </div>
+
+            <style jsx>{`
+                .typing-cursor {
+                    display: inline-block;
+                    margin-left: 2px;
+                    animation: blink 1s step-end infinite;
+                }
+                @keyframes blink {
+                    from, to { opacity: 1; }
+                    50% { opacity: 0; }
+                }
+            `}</style>
         </div>
     );
 }
