@@ -5,6 +5,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 use App\Http\Controllers\AIController;
+use App\Http\Controllers\ResumeController;
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -26,6 +27,10 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/chat', [AIController::class, 'index'])->name('chat.index');
     Route::post('/chat/generate', [AIController::class, 'generate'])->name('chat.generate');
+
+    Route::get('/resume-chat', [ResumeController::class, 'index'])->name('resume.chat');
+    Route::post('/resume/upload', [ResumeController::class, 'upload'])->name('resume.upload');
+    Route::post('/resume/generate', [ResumeController::class, 'generate'])->name('resume.generate');
 
 });
 
